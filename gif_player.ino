@@ -138,10 +138,14 @@ void rawDraw(const char *filename) {
   }
 
   // Buffer to read in data from the raw file.
-  uint16_t rowColors[320];
+  uint8_t rowColors[240*2];
   for (int row = 0; row < 320; row++) { // For each scanline...
     rawFile.read(rowColors, sizeof(rowColors));
     tft.writeRect(0, row, 240, 1, rowColors);
+    if (row==0){
+      Serial.println("Reading from the SD:");
+      Serial.println((char*) &rowColors);
+    }
   }
 
   rawFile.close();
@@ -181,9 +185,7 @@ void parseBMP(const char *bmpFilename) {
   // Create matching raw file on SD card
   if (SD.exists(newRawFilename.c_str())) {
     Serial.println(F("RAW file already exists"));
-    //TODO return instead of overwriting in final verison
-    SD.remove("test.raw");
-    Serial.println(F("RAW fileis being overridden"));
+    return;
   }
 
   Serial.println("Going to create file for write: " + newRawFilename);
@@ -284,6 +286,10 @@ void parseBMP(const char *bmpFilename) {
     // byteArray is an array of uint8_t to prevent loss of converting uint_16t (16 bits) to char (8 bits).
     // It is twice the size of awColors, since each element is half the size of elements in awColors.
     newRawFile.write((char*) &byteArray);
+    if (row==0) {
+      Serial.println("Writing to the SD:");
+      Serial.println((char*) &byteArray);
+    }
   } // end scanline
 
   newRawFile.close();
