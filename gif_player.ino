@@ -105,13 +105,10 @@ void processTouchInput() {
 
 void loop() {
   //processTouchInput();
-  rawDraw("r.bmp");
-  /*while(true) {
-    updateLoadingScreen();
-    delay(1000);
-  }*/
-
-  delay(10000);
+  for (int i = 0; i < 40; i++) {
+    String filename = "frame" + String(i*10) + ".bmp";
+    rawDraw(filename.c_str());
+  }
 }
 
 // Draws a pre-processed RAW file that represents a 240x320 pixel image to the screen.
@@ -125,9 +122,6 @@ void rawDraw(const char *filename) {
   if (!SD.exists(rawFilename.c_str())) {
     Serial.println(F("RAW file doesn't exist"));
     parseBMP(filename);
-  } else {
-    Serial.println(F("RAW file exists but being overridden"));
-    parseBMP(filename);
   }
 
   // Open requested file on SD card
@@ -138,14 +132,10 @@ void rawDraw(const char *filename) {
   }
 
   // Buffer to read in data from the raw file.
-  uint8_t rowColors[240*2];
+  uint16_t rowColors[240];
   for (int row = 0; row < 320; row++) { // For each scanline...
     rawFile.read(rowColors, sizeof(rowColors));
     tft.writeRect(0, row, 240, 1, rowColors);
-    if (row==0){
-      Serial.println("Reading from the SD:");
-      Serial.println((char*) &rowColors);
-    }
   }
 
   rawFile.close();
@@ -164,8 +154,6 @@ void parseBMP(const char *bmpFilename) {
   int x = 240, y = 320;
   uint8_t  r, g, b;
   uint32_t pos = 0;
-
-  uint16_t awColors[320];  // hold colors for one row at a time. Rows are always 320px.
 
   // Open requested file on SD card
   if (!(bmpFile = SD.open(bmpFilename))) {
@@ -188,7 +176,6 @@ void parseBMP(const char *bmpFilename) {
     return;
   }
 
-  Serial.println("Going to create file for write: " + newRawFilename);
   File newRawFile = SD.open(newRawFilename.c_str(), FILE_WRITE);
 
   if (!newRawFile) {
@@ -222,7 +209,6 @@ void parseBMP(const char *bmpFilename) {
     Serial.println(F("Error: bitmap depth must be 24 bit. Depth is " + bmpDepth));
     return;
   }
-  Serial.print("The bitmap depth is:" + String(bmpDepth));
 
   if(read32(bmpFile) != 0) {
     Serial.println(F("Error: bitmap depth must be uncompressed"));
@@ -245,7 +231,14 @@ void parseBMP(const char *bmpFilename) {
   if((w-1) >= tft.width())  w = tft.width();
   if((h-1) >= tft.height()) h = tft.height();
 
-  for (int row=0; row<h; row++) { // For each scanline...
+  updateLoadingScreen();
+  long loadScreenUpdateMillis = millis();
+  // For each scanline...
+  for (int row=0; row<h; row++) {
+    if (millis() - loadScreenUpdateMillis > 750) {
+      updateLoadingScreen();
+      loadScreenUpdateMillis = millis();
+    }
 
     // Seek to start of scan line.  It might seem labor-
     // intensive to be doing this on every line, but this
@@ -273,41 +266,26 @@ void parseBMP(const char *bmpFilename) {
       b = sdbuffer[buffidx++];
       g = sdbuffer[buffidx++];
       r = sdbuffer[buffidx++];
-      awColors[col] = tft.color565(r,g,b);
+      uint16_t processedColor = tft.color565(r,g,b);
       // Attempt to save same data to another array of uint_8, to be written to SD card.
-      byteArray[col*2] = awColors[col] & 0xFF;
-      byteArray[col*2 + 1] = awColors[col] >> 8;
+      byteArray[col*2] = processedColor & 0xFF;
+      byteArray[col*2 + 1] = processedColor >> 8;
     } // end pixel
 
     // This uint16_t array is sent to the display, and correctly displays the image.
-    tft.writeRect(0, row, w, 1, awColors);
     // The same data being saved to the SD card, with intention of being exact
     // payload being sent to the display.
     // byteArray is an array of uint8_t to prevent loss of converting uint_16t (16 bits) to char (8 bits).
-    // It is twice the size of awColors, since each element is half the size of elements in awColors.
-    newRawFile.write((char*) &byteArray);
-    if (row==0) {
-      Serial.println("Writing to the SD:");
-      Serial.println((char*) &byteArray);
-    }
+    newRawFile.write((char*) &byteArray, bmpWidth*2);
   } // end scanline
 
   newRawFile.close();
   bmpFile.close();
-  Serial.println("Finished parsing bitmap into raw file");
 }
 
 // These read 16- and 32-bit types from the SD card file.
 // BMP data is stored little-endian, Arduino is little-endian too.
 // May need to reverse subscript order if porting elsewhere.
-
-uint16_t read16Reverse(File &f) {
-  uint16_t result;
-  ((uint8_t *)&result)[1] = f.read(); // LSB
-  ((uint8_t *)&result)[0] = f.read(); // MSB
-  return result;
-}
-
 uint16_t read16(File &f) {
   uint16_t result;
   ((uint8_t *)&result)[0] = f.read(); // LSB
