@@ -20,6 +20,7 @@
 #define IRQ 23
 
 #define BUFFPIXEL 240
+#define MAX_GIFS 32
 
 int touchX, touchY;
 long lastTouchMs = -1;
@@ -28,7 +29,8 @@ ILI9341_t3 tft = ILI9341_t3(TFT_CS, TFT_DC);
 URTouch myTouch(IRQ, DOUT, TDIN, TCS, TCLK);
 
 // List of folders, where each folder contains the bitmaps for a single gif.
-String folders[32];
+String folders[MAX_GIFS];
+int foldersLength = 0;
 
 void setup(void) {
   // Keep the SD card inactive while working the display.
@@ -43,15 +45,17 @@ void setup(void) {
   tft.setTextSize(2);
   forceSerialWait(tft);
 
-
-  //Serial.print(F("Initializing SD card..."));
   tft.println(F("Init SD card..."));
   while (!SD.begin(BUILTIN_SDCARD)) {
     //Serial.println(F("failed to access SD card!"));
     tft.println(F("failed to access SD card!"));
     delay(2000);
   }
-  //buildGifDirectoryList();
+
+  Serial.println("starting file parsing");
+  buildBmpDirectoryList();
+  processAllAnimations();
+
   myTouch.InitTouch();
   myTouch.setPrecision(PREC_MEDIUM);
   Serial.println("OK!");
@@ -78,17 +82,54 @@ void forceSerialWait(ILI9341_t3 tft) {
   }
 }
 
-// TODO: Finalize method output, and use result.
-void buildGifDirectoryList() {
-  File root = SD.open("");
+void buildBmpDirectoryList() {
+  File root = SD.open("/");
 
-  File entry =  root.openNextFile();
-  for (int i = 0; !entry; i++) {
+  for (int i = 0; foldersLength < MAX_GIFS; i++) {
     // NOTE: NAMES MUST BE 8 OR LESS CHARS!!
-    folders[i] = entry.name();
+    File entry =  root.openNextFile();
+    if (!entry) {
+      // no more files
+      break;
+    }
 
-    Serial.println("found folder: " + folders[i]);
+    if (!entry.isDirectory() ||
+        strcmp(entry.name(), "RAW") == 0 ||
+        strcmp(entry.name(), "SYSTEM~1") == 0) {
+      continue;
+    }
+
+    folders[foldersLength] = entry.name();
+    foldersLength++;
     entry.close();
+  }
+}
+
+void processAllAnimations() {
+  updateLoadingScreen();
+  long loadScreenUpdateMillis = millis();
+  //Serial.println("folders length: " + String(foldersLength));
+  for (int i = 0; i < foldersLength; i++) {
+    if (millis() - loadScreenUpdateMillis > 750) {
+      updateLoadingScreen();
+      loadScreenUpdateMillis = millis();
+    }
+   // Serial.println("Openning folder: " + String(folders[i]) + "/");
+    String folderFilename = "/" + folders[i] + "/";
+    File animationFolder = SD.open(folderFilename.c_str());
+    while(true) {
+      File frame = animationFolder.openNextFile();
+      if (!frame) {
+        break;
+      }
+
+      String fullFilePath = folders[i] + "/" + frame.name();
+      parseBMP(fullFilePath.c_str());
+    //  Serial.print("Opening frame: ");
+     // Serial.println(fullFilePath);
+
+      frame.close();
+    }
   }
 }
 
@@ -117,11 +158,12 @@ void rawDraw(const char *filename) {
   String rawFilename = String(filename);
   rawFilename =
       "raw/" + rawFilename.substring(0, rawFilename.length() - 4) + ".raw";
+      Serial.println(rawFilename);
 
   // Create matching raw file on SD card
   if (!SD.exists(rawFilename.c_str())) {
     Serial.println(F("RAW file doesn't exist"));
-    parseBMP(filename);
+    //parseBMP(filename);
   }
 
   // Open requested file on SD card
@@ -157,12 +199,20 @@ void parseBMP(const char *bmpFilename) {
 
   // Open requested file on SD card
   if (!(bmpFile = SD.open(bmpFilename))) {
-    Serial.println(F("BMP file not found"));
+    Serial.println(String("BMP file not found: ") + bmpFilename);
     return;
   }
 
+  // Create parent raw directory if needed.
   if (!SD.exists("raw")) {
     SD.mkdir("raw");
+  }
+
+  // Create subfolder within raw directory if needed.
+  String rawSubFolder = "raw/" + String(bmpFilename).substring(0, String(bmpFilename).indexOf('/'));
+  if (!SD.exists(rawSubFolder.c_str())) {
+    Serial.println("not made, so make it");
+    SD.mkdir(rawSubFolder.c_str());
   }
 
   // Open requested file on SD card
@@ -231,14 +281,8 @@ void parseBMP(const char *bmpFilename) {
   if((w-1) >= tft.width())  w = tft.width();
   if((h-1) >= tft.height()) h = tft.height();
 
-  updateLoadingScreen();
-  long loadScreenUpdateMillis = millis();
   // For each scanline...
   for (int row=0; row<h; row++) {
-    if (millis() - loadScreenUpdateMillis > 750) {
-      updateLoadingScreen();
-      loadScreenUpdateMillis = millis();
-    }
 
     // Seek to start of scan line.  It might seem labor-
     // intensive to be doing this on every line, but this
