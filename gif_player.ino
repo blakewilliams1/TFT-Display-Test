@@ -24,13 +24,17 @@
 
 int touchX, touchY;
 long lastTouchMs = -1;
-int dotLoopCount;
+int dotLoopCount = 0;
 ILI9341_t3 tft = ILI9341_t3(TFT_CS, TFT_DC);
 URTouch myTouch(IRQ, DOUT, TDIN, TCS, TCLK);
 
 // List of folders, where each folder contains the bitmaps for a single gif.
 String folders[MAX_GIFS];
 int foldersLength = 0;
+boolean cycleAnimations = false;
+File rawRoot;
+File currentRawSubFolder;
+File currentFrame;
 
 void setup(void) {
   // Keep the SD card inactive while working the display.
@@ -47,7 +51,6 @@ void setup(void) {
 
   tft.println(F("Init SD card..."));
   while (!SD.begin(BUILTIN_SDCARD)) {
-    //Serial.println(F("failed to access SD card!"));
     tft.println(F("failed to access SD card!"));
     delay(2000);
   }
@@ -58,6 +61,11 @@ void setup(void) {
 
   myTouch.InitTouch();
   myTouch.setPrecision(PREC_MEDIUM);
+
+  // Set the current animation directory
+  rawRoot = SD.open("/raw");
+  currentRawSubFolder = rawRoot.openNextFile();
+  
   Serial.println("OK!");
 }
 
@@ -103,30 +111,28 @@ void buildBmpDirectoryList() {
     foldersLength++;
     entry.close();
   }
+
+  root.close();
 }
 
 void processAllAnimations() {
   updateLoadingScreen();
   long loadScreenUpdateMillis = millis();
-  //Serial.println("folders length: " + String(foldersLength));
   for (int i = 0; i < foldersLength; i++) {
+    String folderFilename = "/" + folders[i] + "/";
+    File animationFolder = SD.open(folderFilename.c_str());
+    for (int j = 0;; j++) {
     if (millis() - loadScreenUpdateMillis > 750) {
       updateLoadingScreen();
       loadScreenUpdateMillis = millis();
     }
-   // Serial.println("Openning folder: " + String(folders[i]) + "/");
-    String folderFilename = "/" + folders[i] + "/";
-    File animationFolder = SD.open(folderFilename.c_str());
-    while(true) {
       File frame = animationFolder.openNextFile();
       if (!frame) {
         break;
       }
 
       String fullFilePath = folders[i] + "/" + frame.name();
-      parseBMP(fullFilePath.c_str());
-    //  Serial.print("Opening frame: ");
-     // Serial.println(fullFilePath);
+      parseBMP(fullFilePath.c_str(), j);
 
       frame.close();
     }
@@ -138,6 +144,10 @@ void processTouchInput() {
     myTouch.read();
     touchX = myTouch.getX();
     touchY = myTouch.getY();
+    long timeDiff = millis() - lastTouchMs;
+    if (timeDiff > 400 && timeDiff < 1500) {
+      cycleAnimations = true;
+    }
     lastTouchMs = millis();
     Serial.println(
       "Touch registered at x=" + String(touchX) + " y=" + String(touchY));
@@ -145,31 +155,46 @@ void processTouchInput() {
 }
 
 void loop() {
-  //processTouchInput();
-  for (int i = 0; i < 40; i++) {
-    String filename = "frame" + String(i*10) + ".bmp";
-    rawDraw(filename.c_str());
+  // Cycle through each frame of current animation till user cycles animations.
+  while (!cycleAnimations) {
+    processTouchInput();
+
+    // Iterate through the frames.
+    currentFrame = currentRawSubFolder.openNextFile();
+    if (!currentFrame) {
+      currentRawSubFolder.rewindDirectory();
+      currentFrame = currentRawSubFolder.openNextFile();
+    }
+
+    // Get filename of raw to draw, and draw it.
+    String currentRawFileName =
+        String("raw/") + currentRawSubFolder.name() + String('/') + currentFrame.name();
+    rawDraw(currentRawFileName.c_str());
+
+    currentFrame.close();
+  }
+
+  // Cycle to next animation.
+  cycleAnimations = false;
+  currentRawSubFolder.close();
+  currentRawSubFolder = rawRoot.openNextFile();
+  if (!currentRawSubFolder) {
+    rawRoot.rewindDirectory();
+    currentRawSubFolder = rawRoot.openNextFile();
   }
 }
 
 // Draws a pre-processed RAW file that represents a 240x320 pixel image to the screen.
-void rawDraw(const char *filename) {
-  // Open requested file on SD card
-  String rawFilename = String(filename);
-  rawFilename =
-      "raw/" + rawFilename.substring(0, rawFilename.length() - 4) + ".raw";
-      Serial.println(rawFilename);
-
+void rawDraw(String rawFilename) {
   // Create matching raw file on SD card
   if (!SD.exists(rawFilename.c_str())) {
-    Serial.println(F("RAW file doesn't exist"));
-    //parseBMP(filename);
+    Serial.println("RAW file doesn't exist");
   }
 
   // Open requested file on SD card
   File rawFile;
   if (!(rawFile = SD.open(rawFilename.c_str()))) {
-    Serial.println(F("BMP file not found"));
+    Serial.println("BMP file not found");
     return;
   }
 
@@ -183,7 +208,7 @@ void rawDraw(const char *filename) {
   rawFile.close();
 }
 
-void parseBMP(const char *bmpFilename) {
+void parseBMP(const char *bmpFilename, int frameNumber) {
   File     bmpFile;
   int      bmpWidth, bmpHeight;   // W+H in pixels
   uint8_t  bmpDepth;              // Bit depth (currently must be 24)
@@ -193,7 +218,6 @@ void parseBMP(const char *bmpFilename) {
   uint16_t buffidx = sizeof(sdbuffer); // Current position in sdbuffer
   boolean  flip    = true;        // BMP is stored bottom-to-top
   int      w, h;
-  int x = 240, y = 320;
   uint8_t  r, g, b;
   uint32_t pos = 0;
 
@@ -227,7 +251,6 @@ void parseBMP(const char *bmpFilename) {
   }
 
   File newRawFile = SD.open(newRawFilename.c_str(), FILE_WRITE);
-
   if (!newRawFile) {
     Serial.println(F("Error creating new RAW file."));
     return;
